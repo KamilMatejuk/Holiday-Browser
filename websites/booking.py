@@ -1,3 +1,5 @@
+from urllib.request import urlopen
+
 import os
 import time
 import math
@@ -19,7 +21,7 @@ TODO
 '''
 
 
-def check_booking(city, people, dates, out_file, counter=5):
+def check_booking(city:str, people:dict, dates:tuple, out_file:str, counter=5):
     """
     Parameters
     ----------
@@ -38,35 +40,29 @@ def check_booking(city, people, dates, out_file, counter=5):
     if counter <= 0:
         return
 
-    url = 'https://www.booking.com/'
+    url = generateUrl(city, people, dates)
     proxy = chooseProxy()
     options = webdriver.ChromeOptions()
-    options.add_argument(f'--proxy-server={proxy}')
-    options.add_argument('--headless')
-
+    # options.add_argument(f'--proxy-server={proxy}')
+    # options.add_argument('--headless')
     try:
         with webdriver.Chrome(executable_path='/home/kamil/Desktop/Wakacje/files/chromedriver', options=options) as browser:
             browser.get(url)
             WebDriverWait(browser, 45).until(
                 EC.presence_of_element_located((By.XPATH, '/html/body'))
             )
+            # couldn't load with given IP, proxy error
             if 'ERR_' in browser.page_source:
-                # couldnt load with given IP, proxy error
                 print(f'Page couldn\'t load with IP {proxy}')
                 check_booking(city, people, dates, out_file, counter=(counter - 1))
                 return
+            soup = BeautifulSoup(browser.page_source, features='html.parser')
+            # couldn't find city
+            if city[0].lower() not in str(soup.title).lower():
+                print(f'Couldn\'t find {city[0]}')
+                return
+            links = getSearchLinks(soup, url)
 
-            inputCity(browser, city[0])
-            time.sleep(random.randint(1, 3))
-            submit = waitForXPATH(browser, '/html/body/div[5]/div/div/div[2]/form/div[1]/div[4]/div[2]/button')
-            browser.execute_script("arguments[0].click();", submit)
-            if not succesfulSearch(browser, city[0]):
-                print('Couldn\'t find ' + city[0])
-                return None
-            url = linkInjection(browser, people, dates)
-            time.sleep(random.randint(2, 5))
-            links = getSearchLinks(browser, url)
-    
     except TimeoutException:
         print(f'Too long waiting time for {city[0]}, IP {proxy}')
         check_booking(city, people, dates, out_file, counter=(counter - 1))
@@ -87,209 +83,165 @@ def check_booking(city, people, dates, out_file, counter=5):
         print(f'Found {len(links)} for {city[0]} on {proxy}')
 
 
-def waitForXPATH(browser, xpath):
+def generateUrl(city, people, dates):
     """
-    Waits until element is present on webpage, by specified xpath
-    """
-
-    return WebDriverWait(browser, 60).until(
-        EC.presence_of_element_located((By.XPATH, xpath))
-    )
-
-
-def inputCity(browser, city):
-    """
-    Insert city into a form on website.
-
     Parameters
     ----------
-    browser : webdriver.Chrome
-        The browser used to connect and scrap webpage
     city : str
-        Name of city for search
-    """
-
-    city_xpath = '/html/body/div[5]/div/div/div[2]/form/div[1]/div[1]/div[1]/div[1]/label/input'
-    city_field = waitForXPATH(browser, city_xpath)
-    city_field.send_keys(city)
-
-
-def succesfulSearch(browser, city):
-    """
-    Check if the city was successfully recognised.
-
-    Parameters
-    ----------
-    browser : webdriver.Chrome
-        The browser used to connect and scrap webpage
-    city : str
-        Name of city for search
-    """
-
-    header_xpath = '/html/body/div[6]/div/div[3]/div[1]/div[1]/div[4]/div/div[1]/div/h1'
-    header = str(waitForXPATH(browser, header_xpath).text)
-    return city.lower() in header.lower()
-
-
-def linkInjection(browser, people, dates):
-    """
-    Generate link and populate it with data
-
-    Parameters
-    ----------
-    browser : webdriver.Chrome
-        The browser used to connect and scrap webpage
+        City for which is searching
     people : dict
         Dictionary containing number of adults, children and age of each child
     dates : tuple
         Datetime objects of starting and ending date
+        
+    Generates search url for booking.com with given data
     """
 
-    url = str(browser.current_url)
-    # people and dates
-    data_index = url.find('checkin_year')
-    if data_index > -1:
-        url = url[:data_index]
-    new_data_url = f'checkin_year={dates[0].year}&' + \
-                   f'checkin_month={dates[0].month}&' + \
-                   f'checkin_monthday={dates[0].day}&' + \
-                   f'checkout_year={dates[1].year}&' + \
-                   f'checkout_month={dates[1].month}&' + \
-                   f'checkout_monthday={dates[1].day}&' + \
-                   f'group_adults={people.get("adults")}&' + \
-                   f'group_children={people.get("children")}'
-    for age in people.get('ages'):
-        new_data_url += f'&age={age}'
-    new_data_url += f'&no_rooms=1&from_sf=1'
-    url += new_data_url
-    # filters
-    filters = '&nflt=pri%3D1%3Boos%3D1%3B'
-    url += filters
+    # basic url
+    url = 'https://www.booking.com/searchresults.pl.html?'
+    # city name
+    url += f'ss={city[0]}'
+    # start date
+    url += f'&checkin_year={dates[0].year}'
+    url += f'&checkin_month={dates[0].month}'
+    url += f'&checkin_monthday={dates[0].day}'
+    # end date
+    url += f'&checkout_year={dates[1].year}'
+    url += f'&checkout_month={dates[1].month}'
+    url += f'&checkout_monthday={dates[1].day}'
+    # people
+    url += f'&group_adults={people.get("adults", 0)}'
+    url += f'&group_children={people.get("children", 0)}'
+    for age in people.get('ages', []):
+        url += f'&age={age}'
+    # url += f'&no_rooms={}'
+    # show only avaliable
+    url += '&nflt=oos%3D1%3B'
     return url
 
 
-def getSearchLinks(browser, url, secondary=False):
-    # dodać &offset=25 do linku
-    """
-    Return the result links from webpage
+# def getSearchLinks(browser, url, secondary=False):
+#     # dodać &offset=25 do linku
+#     """
+#     Return the result links from webpage
 
-    Parameters
-    ----------
-    browser : webdriver.Chrome
-        The browser used to connect and scrap webpage
-    url : str
-        A link of search page
-    secondary : bool
-        Specifies if its the first page of search (False), or one of the next (True)
-    """
+#     Parameters
+#     ----------
+#     browser : webdriver.Chrome
+#         The browser used to connect and scrap webpage
+#     url : str
+#         A link of search page
+#     secondary : bool
+#         Specifies if its the first page of search (False), or one of the next (True)
+#     """
 
-    browser.get(url)
-    time.sleep(5)
-    soup = BeautifulSoup(browser.page_source, features='html.parser') 
-    links = set()
-    results = soup.select('#hotellist_inner>div')
-    for div in results:
-        if div.get('class') and 'sr_separator_first' in div.get('class'):
-            return links
-        link = div.select_one('div a')
-        if link:
-            links.add('https://www.booking.com' + link.get('href'))
+#     browser.get(url)
+#     time.sleep(5)
+#     soup = BeautifulSoup(browser.page_source, features='html.parser')
+#     links = set()
+#     results = soup.select('#hotellist_inner>div')
+#     for div in results:
+#         if div.get('class') and 'sr_separator_first' in div.get('class'):
+#             return links
+#         link = div.select_one('div a')
+#         if link:
+#             links.add('https://www.booking.com' + link.get('href'))
     
-    if secondary:
-        return links
+#     if secondary:
+#         return links
 
-    number_of_results_h1 = soup.select_one('.sr_header h1')
-    if number_of_results_h1 is not None:
-        number_of_results = int(''.join(i for i in number_of_results_h1.text if i.isdigit()))
-        for i in range(math.floor(number_of_results/25)):
-            links = links | getSearchLinks(browser, url + f'&offset={25 * (i+1)}', True)
+#     number_of_results_h1 = soup.select_one('.sr_header h1')
+#     if number_of_results_h1 is not None:
+#         number_of_results = int(''.join(i for i in number_of_results_h1.text if i.isdigit()))
+#         for i in range(math.floor(number_of_results/25)):
+#             links = links | getSearchLinks(browser, url + f'&offset={25 * (i+1)}', True)
 
-    return links
+#     return links
 
 
-def save(city, dates, url, results_file, counter=3):
-    """
-    Open given url, extract data and save to file.
+# def save(city, dates, url, results_file, counter=3):
+#     """
+#     Open given url, extract data and save to file.
 
-    Parameters
-    ----------
-    city : str
-        Name of city for search
-    dates : tuple
-        A pair of `datetime` objects, one for starting and one for ending date
-    url : str
-        Link to page of hotel
-    results_file : str
-        Name of the file for saving
-    """
+#     Parameters
+#     ----------
+#     city : str
+#         Name of city for search
+#     dates : tuple
+#         A pair of `datetime` objects, one for starting and one for ending date
+#     url : str
+#         Link to page of hotel
+#     results_file : str
+#         Name of the file for saving
+#     """
 
-    if counter <= 0:
-        return
+#     if counter <= 0:
+#         return
 
-    if not os.path.exists(results_file):
-        with open(results_file, 'w+') as f:
-            f.write('MIEJSCOWOŚĆ \t WIELKOŚĆ \t ODLEGŁOŚĆ DO MORZA \t NAZWA \t DATA \t CENA ZA CAŁOŚĆ \t CENA ZA DZIEŃ \t NR TELEFONU \t LINK \n')
+#     if not os.path.exists(results_file):
+#         with open(results_file, 'w+') as f:
+#             f.write('MIEJSCOWOŚĆ \t WIELKOŚĆ \t ODLEGŁOŚĆ DO MORZA \t NAZWA \t DATA \t CENA ZA CAŁOŚĆ \t CENA ZA DZIEŃ \t NR TELEFONU \t LINK \n')
     
-    proxy = chooseProxy()
-    options = webdriver.ChromeOptions()
-    options.add_argument(f'--proxy-server={proxy}')
-    # options.add_argument('--headless')
-    # options.add_argument('--ignore-certificate-errors')
+#     proxy = chooseProxy()
+#     options = webdriver.ChromeOptions()
+#     options.add_argument(f'--proxy-server={proxy}')
+#     # options.add_argument('--headless')
+#     # options.add_argument('--ignore-certificate-errors')
 
-    try:
-        with webdriver.Chrome(executable_path='/home/kamil/Desktop/Wakacje/files/chromedriver', options=options) as browser:
-            browser.get(url)
-            WebDriverWait(browser, 45).until(EC.presence_of_element_located((By.XPATH, '/html/body/div')))
-            if 'ERR_' in browser.page_source:
-                # couldnt load with given IP, proxy error
-                print(f'Page couldn\'t load with IP {proxy}')
-                save(city, dates, url, results_file, counter=(counter - 1))
-                return
-            soup = BeautifulSoup(browser.page_source, features='html.parser')
-            with open('soup.html', 'w+') as f:
-                f.write(str(soup))
+#     try:
+#         with webdriver.Chrome(executable_path='/home/kamil/Desktop/Wakacje/files/chromedriver', options=options) as browser:
+#             browser.get(url)
+#             WebDriverWait(browser, 45).until(EC.presence_of_element_located((By.XPATH, '/html/body/div')))
+#             if 'ERR_' in browser.page_source:
+#                 # couldnt load with given IP, proxy error
+#                 print(f'Page couldn\'t load with IP {proxy}')
+#                 save(city, dates, url, results_file, counter=(counter - 1))
+#                 return
+#             soup = BeautifulSoup(browser.page_source, features='html.parser')
+#             with open('soup.html', 'w+') as f:
+#                 f.write(str(soup))
 
-    except (WebDriverException, ConnectionError, MaxRetryError, NewConnectionError):
-        save(city, dates, url, results_file, counter=(counter - 1))
-        return
+#     except (WebDriverException, ConnectionError, MaxRetryError, NewConnectionError):
+#         save(city, dates, url, results_file, counter=(counter - 1))
+#         return
 
-    else:
-        days = (dates[1] - dates[0]).days
-        price_for_all = soup.select('.totalPrice .bui-price-display__value.prco-text-nowrap-helper.prco-inline-block-maker-helper')
-        if price_for_all is not None and len(price_for_all) > 0:
-            price_for_all = price_for_all[0].text
-            multiplier = {
-                '€': 4.40,
-                '$': 3.70,
-                'zł': 1.00,
-                '': 0.00
-            }
-            for currency in multiplier:
-                if currency in price_for_all:
-                    value_multiplier = multiplier.get(currency)
-                    break
-            price_for_all = float(''.join(i for i in price_for_all if i.isdigit() or i == '.')) * value_multiplier
-            price_for_day = price_for_all / days
-        else:
-            price_for_all = 0.00
-            price_for_day = 0.00
+#     else:
+#         days = (dates[1] - dates[0]).days
+#         price_for_all = soup.select('.totalPrice .bui-price-display__value.prco-text-nowrap-helper.prco-inline-block-maker-helper')
+#         if price_for_all is not None and len(price_for_all) > 0:
+#             price_for_all = price_for_all[0].text
+#             multiplier = {
+#                 '€': 4.40,
+#                 '$': 3.70,
+#                 'zł': 1.00,
+#                 '': 0.00
+#             }
+#             for currency in multiplier:
+#                 if currency in price_for_all:
+#                     value_multiplier = multiplier.get(currency)
+#                     break
+#             price_for_all = float(''.join(i for i in price_for_all if i.isdigit() or i == '.')) * value_multiplier
+#             price_for_day = price_for_all / days
+#         else:
+#             price_for_all = 0.00
+#             price_for_day = 0.00
             
-        place_name = soup.select_one('#hp_hotel_name')
-        if place_name is not None:
-            place_name = place_name.text.splitlines()[2].replace('\n', '')
+#         place_name = soup.select_one('#hp_hotel_name')
+#         if place_name is not None:
+#             place_name = place_name.text.splitlines()[2].replace('\n', '')
         
-        with open(results_file, 'a+') as f:
-            f.write('%s \t %d \t %.2f km \t %s \t %s \t %.2f zł \t %.2f zł \t %s \t %s \n' % (
-                city[0],
-                city[2],
-                city[1],
-                str(place_name),
-                dates[0].strftime('%d.%m') + ' - ' + dates[1].strftime('%d.%m'),
-                price_for_all,
-                price_for_day,
-                '---',
-                url
-            ))
+#         with open(results_file, 'a+') as f:
+#             f.write('%s \t %d \t %.2f km \t %s \t %s \t %.2f zł \t %.2f zł \t %s \t %s \n' % (
+#                 city[0],
+#                 city[2],
+#                 city[1],
+#                 str(place_name),
+#                 dates[0].strftime('%d.%m') + ' - ' + dates[1].strftime('%d.%m'),
+#                 price_for_all,
+#                 price_for_day,
+#                 '---',
+#                 url
+#             ))
 
 
 def chooseProxy():
